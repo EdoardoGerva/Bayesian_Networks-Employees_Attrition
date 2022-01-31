@@ -1,0 +1,612 @@
+---
+title: "Assignment-2"
+author: "eg"
+date: "16/12/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#install.packages("bnlearn")
+#devtools::install_github("jtextor/dagitty/r")
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("Rgraphviz")
+```
+
+
+Import useful libraries
+```{r}
+library(tidyverse)
+library(dagitty)
+library(lavaan)
+library(stats)
+library(bnlearn)
+library(naniar)
+library(ggplot2)
+library(caret)
+library(MLmetrics)
+library(tree)
+library(ROSE)
+```
+
+
+
+Read original data
+```{r}
+data_original <- read.csv(paste0("data\\HR-Employee-Attrition.csv"))
+data_original <- as.data.frame(data_original)
+```
+
+#######################################################
+Preprocessing
+
+
+```{r}
+colnames(data_original)[1] = 'Age'
+
+data_original$Attrition <- as.numeric(ordered( data_original$Attrition,c("No","Yes")))
+data_original$Attrition <- as.factor(as.numeric(ifelse(data_original$Attrition == 1, 0,1)))
+
+data <- data_original %>% 
+  mutate(TotalSatisfaction = rowMeans(cbind(EnvironmentSatisfaction, JobSatisfaction, RelationshipSatisfaction))) %>% 
+  select(-c(Over18, StandardHours, EmployeeCount, EmployeeNumber, MonthlyRate, HourlyRate, DailyRate, JobInvolvement, EducationField, TrainingTimesLastYear,YearsWithCurrManager, Department, JobSatisfaction, EnvironmentSatisfaction, RelationshipSatisfaction, YearsInCurrentRole,  JobRole, PerformanceRating))
+
+
+
+str(data)
+```
+
+
+
+```{r}
+data$Age <- as.factor(cut(data$Age, c(17,29,40,50,60), include.lowest = T,ordered_result = T))
+
+data$DistanceFromHome <- as.factor(cut(data$DistanceFromHome, c(0,5,15,30), include.lowest = T,ordered_result = T))
+
+data$JobLevel <- as.factor(data$JobLevel)
+data$JobLevel <- ordered(data$JobLevel, levels = c(1,2,3,4,5))
+
+data$MonthlyIncome <- as.factor(cut(data$MonthlyIncome, c(0,3000,8000,12000,20000), include.lowest = T,ordered_result = T))
+
+data$PercentSalaryHike <- as.factor(cut(data$PercentSalaryHike, c(11,13,17,25), include.lowest = T,ordered_result = T))
+
+data$NumCompaniesWorked <- as.factor(cut(data$NumCompaniesWorked, c(0,1,4,9), include.lowest = T,ordered_result = T))
+
+data$TotalWorkingYears <- as.factor(cut(data$TotalWorkingYears, c(0,5,10,20,40), include.lowest = T,ordered_result = T))
+
+data$WorkLifeBalance <- as.factor(data$WorkLifeBalance)
+data$WorkLifeBalance <- ordered(data$WorkLifeBalance, levels = c(1,2,3,4))
+
+data$YearsAtCompany <- as.factor(cut(data$YearsAtCompany, c(0,5,10,20,40), include.lowest = T,ordered_result = T))
+
+data$YearsSinceLastPromotion <- as.factor(cut(data$YearsSinceLastPromotion, c(0,1,3,5,10,15), include.lowest = T,ordered_result = T))
+
+data$TotalSatisfaction <- as.factor(round(data$TotalSatisfaction,0))
+data$TotalSatisfaction <- ordered(data$TotalSatisfaction, levels = c(1,2,3,4))
+
+data$Education <- as.factor(data$Education)
+data$Education <- ordered(data$Education, levels = c(1,2,3,4,5))
+
+data$BusinessTravel <- as.factor(data$BusinessTravel)
+data$BusinessTravel <- ordered(data$BusinessTravel, levels = c("Non-Travel","Travel_Rarely","Travel_Frequently"))
+
+data$Gender <- as.factor(as.numeric(ordered( data$Gender,c("Female","Male"))))
+
+data$MaritalStatus <-as.factor(as.integer( data$MaritalStatus=="Married" ))
+
+data$StockOptionLevel <- as.factor(data$StockOptionLevel)
+data$StockOptionLevel <-ordered(data$StockOptionLevel, levels = c(0,1,2,3))
+```
+
+
+```{r}
+str(data)
+```
+
+```{r}
+names <- c(colnames(data))
+for (var in names) {
+  print(var)
+  print(levels(data[,var]))
+}
+```
+
+We can see that we have 3 variables containing 5 different classes: Education, JobLevel, YearsSinceLastPromotion. We'll now try to reduce their number.
+
+1) Education
+We will divide this variable in three categories: 'College and below', 'Bachelor's and Master', 'Doctor'
+
+```{r}
+data$Education <-as.character(data$Education)
+data$Education[data$Education== 1] <- "College and below"
+data$Education[data$Education== 2] <- "College and below"
+data$Education[data$Education == 3] <- "Bachelor's and Master"
+data$Education[data$Education == 4] <- "Bachelor's and Master"
+data$Education[data$Education==5] <- "Doctor"
+data$Education <-as.factor(data$Education)
+
+```
+
+2) JobLevel
+We will divide this variable in two categories: 'low', from 1 to 3 and 'high', 4 and 5.
+
+```{r}
+data$JobLevel <-as.character(data$JobLevel)
+data$JobLevel[data$JobLevel== 1] <- "low"
+data$JobLevel[data$JobLevel== 2] <- "low"
+data$JobLevel[data$JobLevel == 3] <- "low"
+data$JobLevel[data$JobLevel == 4] <- "high"
+data$JobLevel[data$JobLevel==5] <- "high"
+data$JobLevel <-as.factor(data$JobLevel)
+
+```
+
+3) yearsSinceLastPromotion
+We will divide this variable in two categories: '0-1 years' and '2 or before'.
+
+```{r}
+data$YearsSinceLastPromotion <-as.character(data$YearsSinceLastPromotion)
+data$YearsSinceLastPromotion[data$YearsSinceLastPromotion== 0] <- "this or last year"
+data$YearsSinceLastPromotion[data$YearsSinceLastPromotion== 1] <- "this or last year"
+data$YearsSinceLastPromotion[data$YearsSinceLastPromotion >= 2] <- "more than 2"
+data$YearsSinceLastPromotion <-as.factor(data$YearsSinceLastPromotion)
+
+```
+
+############################################################################################
+Constraint-based structure learning algorithms: PC algorithm 
+and further preprocessing
+
+```{r}
+plot(pc.stable(data) )
+```
+
+Considering subset of variables:
+```{r}
+data_parents <- data %>% 
+  select(c(Attrition, TotalSatisfaction, BusinessTravel, MonthlyIncome, MaritalStatus, OverTime, DistanceFromHome, Age, StockOptionLevel))
+
+```
+
+```{r}
+plot(pc.stable(data_parents) )
+```
+
+We can see that also leaving only the Attrition partents with the highest estimate coefficient, we cannot achieve good results.
+So, let's try to simplify more the variables:
+```{r}
+names <- c(colnames(data_parents))
+for (var in names) {
+  print(var)
+  print(levels(data_parents[,var]))
+}
+```
+
+```{r}
+data_parents$TotalSatisfaction <-as.character(data_parents$TotalSatisfaction)
+data_parents$TotalSatisfaction[data_parents$TotalSatisfaction== 1] <- "low"
+data_parents$TotalSatisfaction[data_parents$TotalSatisfaction== 2] <- "low"
+data_parents$TotalSatisfaction[data_parents$TotalSatisfaction == 3] <- "high"
+data_parents$TotalSatisfaction[data_parents$TotalSatisfaction == 4] <- "high"
+data_parents$TotalSatisfaction <-as.factor(data_parents$TotalSatisfaction)
+
+```
+
+```{r}
+data_parents$MonthlyIncome <-as.character(data_parents$MonthlyIncome)
+data_parents$MonthlyIncome[data_parents$MonthlyIncome== "[0,3e+03]"] <- "low"
+data_parents$MonthlyIncome[data_parents$MonthlyIncome== "(3e+03,8e+03]"] <- "medium"
+data_parents$MonthlyIncome[data_parents$MonthlyIncome == "(8e+03,1.2e+04]"] <- "medium"
+data_parents$MonthlyIncome[data_parents$MonthlyIncome == "(1.2e+04,2e+04]"] <- "high"
+data_parents$MonthlyIncome <-as.factor(data_parents$MonthlyIncome)
+
+```
+
+```{r}
+data_parents$StockOptionLevel <-as.character(data_parents$StockOptionLevel)
+data_parents$StockOptionLevel[data_parents$StockOptionLevel== 0] <- "No stock"
+data_parents$StockOptionLevel[data_parents$StockOptionLevel== 1] <- "stock"
+data_parents$StockOptionLevel[data_parents$StockOptionLevel == 2] <- "stock"
+data_parents$StockOptionLevel[data_parents$StockOptionLevel == 3] <- "stock"
+data_parents$StockOptionLevel <-as.factor(data_parents$StockOptionLevel)
+
+```
+
+```{r}
+data_parents$BusinessTravel <-as.character(data_parents$BusinessTravel)
+data_parents$BusinessTravel[data_parents$BusinessTravel== "Non-Travel"] <- "Non-Travel" 
+data_parents$BusinessTravel[data_parents$BusinessTravel== "Travel_Rarely" ] <- "Travel"
+data_parents$BusinessTravel[data_parents$BusinessTravel == "Travel_Frequently"] <- "Travel"
+data_parents$BusinessTravel <-as.factor(data_parents$BusinessTravel)
+
+```
+
+```{r}
+data_parents$DistanceFromHome <-as.character(data_parents$DistanceFromHome)
+data_parents$DistanceFromHome[data_parents$DistanceFromHome== "[0,5]"] <- "close" 
+data_parents$DistanceFromHome[data_parents$DistanceFromHome== "(5,15]" ] <- "far"
+data_parents$DistanceFromHome[data_parents$DistanceFromHome == "(15,30]"] <- "far"
+data_parents$DistanceFromHome <-as.factor(data_parents$DistanceFromHome)
+
+```
+
+
+```{r}
+plot(pc.stable(data_parents) )
+```
+
+Let's try again with the whole dataset simplifying the variables more:
+```{r}
+names <- c(colnames(data))
+for (var in names) {
+  print(var)
+  print(levels(data[,var]))
+}
+```
+
+
+```{r}
+data$WorkLifeBalance <-as.character(data$WorkLifeBalance)
+data$WorkLifeBalance[data$WorkLifeBalance== 1 ] <- "low"
+data$WorkLifeBalance[data$WorkLifeBalance== 2] <- "low"
+data$WorkLifeBalance[data$WorkLifeBalance == 3] <- "high"
+data$WorkLifeBalance[data$WorkLifeBalance == 4] <- "high"
+data$WorkLifeBalance <-as.factor(data$WorkLifeBalance)
+
+```
+
+```{r}
+data$TotalWorkingYears <-as.character(data$TotalWorkingYears)
+data$TotalWorkingYears[data$TotalWorkingYears== "[0,5]" ] <- "less than 5 or equal"
+data$TotalWorkingYears[data$TotalWorkingYears== "(5,10]"] <- "more than 5"
+data$TotalWorkingYears[data$TotalWorkingYears == "(10,20]"] <- "more than 5"
+data$TotalWorkingYears[data$TotalWorkingYears == "(20,40]"] <- "more than 5"
+data$TotalWorkingYears <-as.factor(data$TotalWorkingYears)
+
+```
+
+```{r}
+data$YearsAtCompany <-as.character(data$YearsAtCompany)
+data$YearsAtCompany[data$YearsAtCompany== "[0,5]" ] <- "less than 5 or equal"
+data$YearsAtCompany[data$YearsAtCompany== "(5,10]"] <- "more than 5"
+data$YearsAtCompany[data$YearsAtCompany == "(10,20]"] <- "more than 5"
+data$YearsAtCompany[data$YearsAtCompany == "(20,40]"] <- "more than 5"
+data$YearsAtCompany <-as.factor(data$YearsAtCompany)
+
+```
+
+```{r}
+data$NumCompaniesWorked <-as.character(data$NumCompaniesWorked)
+data$NumCompaniesWorked[data$NumCompaniesWorked== "[0,1]"] <- "0 or 1"
+data$NumCompaniesWorked[data$NumCompaniesWorked== "(1,4]"] <- "more than 1"
+data$NumCompaniesWorked[data$NumCompaniesWorked == "(4,9]"] <- "more than 1"
+data$NumCompaniesWorked <-as.factor(data$NumCompaniesWorked)
+
+```
+
+```{r}
+data$NumCompaniesWorked <-as.character(data$NumCompaniesWorked)
+data$NumCompaniesWorked[data$NumCompaniesWorked== "[0,1]"] <- "0 or 1"
+data$NumCompaniesWorked[data$NumCompaniesWorked== "(1,4]"] <- "more than 1"
+data$NumCompaniesWorked[data$NumCompaniesWorked == "(4,9]"] <- "more than 1"
+data$NumCompaniesWorked <-as.factor(data$NumCompaniesWorked)
+
+```
+
+```{r}
+data$Age <-as.character(data$Age)
+data$Age[data$Age== "[17,29]"] <- "young"
+data$Age[data$Age== "(29,40]"] <- "middle-age or old"
+data$Age[data$Age == "(40,50]"] <- "middle-age or old"
+data$Age[data$Age == "(50,60]"] <- "middle-age or old"
+data$Age <-as.factor(data$Age)
+
+```
+
+```{r}
+data$TotalSatisfaction <-as.character(data$TotalSatisfaction)
+data$TotalSatisfaction[data$TotalSatisfaction== 1] <- "low"
+data$TotalSatisfaction[data$TotalSatisfaction== 2] <- "low"
+data$TotalSatisfaction[data$TotalSatisfaction == 3] <- "high"
+data$TotalSatisfaction[data$TotalSatisfaction == 4] <- "high"
+data$TotalSatisfaction <-as.factor(data$TotalSatisfaction)
+
+```
+
+```{r}
+data$MonthlyIncome <-as.character(data$MonthlyIncome)
+data$MonthlyIncome[data$MonthlyIncome== "[0,3e+03]"] <- "low"
+data$MonthlyIncome[data$MonthlyIncome== "(3e+03,8e+03]"] <- "medium"
+data$MonthlyIncome[data$MonthlyIncome == "(8e+03,1.2e+04]"] <- "medium"
+data$MonthlyIncome[data$MonthlyIncome == "(1.2e+04,2e+04]"] <- "high"
+data$MonthlyIncome <-as.factor(data$MonthlyIncome)
+
+```
+
+```{r}
+data$StockOptionLevel <-as.character(data$StockOptionLevel)
+data$StockOptionLevel[data$StockOptionLevel== 0] <- "No stock"
+data$StockOptionLevel[data$StockOptionLevel== 1] <- "stock"
+data$StockOptionLevel[data$StockOptionLevel == 2] <- "stock"
+data$StockOptionLevel[data$StockOptionLevel == 3] <- "stock"
+data$StockOptionLevel <-as.factor(data$StockOptionLevel)
+
+```
+
+```{r}
+data$BusinessTravel <-as.character(data$BusinessTravel)
+data$BusinessTravel[data$BusinessTravel== "Non-Travel"] <- "Non-Travel" 
+data$BusinessTravel[data$BusinessTravel== "Travel_Rarely" ] <- "Travel"
+data$BusinessTravel[data$BusinessTravel == "Travel_Frequently"] <- "Travel"
+data$BusinessTravel <-as.factor(data$BusinessTravel)
+
+```
+
+```{r}
+data$DistanceFromHome <-as.character(data$DistanceFromHome)
+data$DistanceFromHome[data$DistanceFromHome== "[0,5]"] <- "close" 
+data$DistanceFromHome[data$DistanceFromHome== "(5,15]" ] <- "far"
+data$DistanceFromHome[data$DistanceFromHome == "(15,30]"] <- "far"
+data$DistanceFromHome <-as.factor(data$DistanceFromHome)
+
+```
+
+
+```{r}
+net_pc <- pc.stable(data)
+plot(net_pc)
+```
+
+Let's see each variable with its own levels:
+```{r}
+names <- c(colnames(data))
+for (var in names) {
+  cat("\n")
+  print(var)
+  print(levels(data[,var]))
+}
+```
+
+
+###############################################################################################################
+TABU SEARCH
+###############################################################################################################
+
+```{r}
+net_tabu <- tabu(data,score="bic") 
+plot(net_tabu)
+```
+
+
+########################################################################################
+
+Comparing the distances between the networks, through the hamming distance
+
+```{r}
+
+graph <- graphLayout(dagitty('dag {
+{
+Age -> Attrition
+Age -> Education
+Age -> JobLevel
+Age -> MaritalStatus
+Age -> NumCompaniesWorked
+Age -> TotalWorkingYears
+Age -> YearsAtCompany
+BusinessTravel -> Attrition
+DistanceFromHome -> Attrition
+DistanceFromHome -> WorkLifeBalance
+Education -> JobLevel
+Gender -> BusinessTravel
+JobLevel -> MonthlyIncome
+MaritalStatus -> Attrition
+MonthlyIncome -> Attrition
+NumCompaniesWorked -> YearsAtCompany
+OverTime -> Attrition
+OverTime -> TotalSatisfaction
+PercentSalaryHike -> Attrition
+StockOptionLevel -> Attrition
+StockOptionLevel -> MonthlyIncome
+TotalSatisfaction -> Attrition
+TotalWorkingYears -> JobLevel
+TotalWorkingYears -> MonthlyIncome
+TotalWorkingYears -> NumCompaniesWorked
+TotalWorkingYears -> YearsAtCompany
+WorkLifeBalance -> TotalSatisfaction
+YearsAtCompany -> JobLevel
+YearsAtCompany -> YearsSinceLastPromotion
+YearsSinceLastPromotion -> Attrition
+}
+}
+'))
+
+
+plot(graph)
+```
+
+Let's see if the DAGs are different
+
+all.equal tells us only if the DAGs are different.
+
+```{r}
+all.equal(net_pc, net_tabu)
+```
+
+```{r}
+net_original <-model2network(toString(graph,"bnlearn"))
+
+all.equal(net_pc, net_original)
+```
+
+```{r}
+
+all.equal(net_tabu, net_original)
+```
+
+Computing the Hamming distance between DAGs
+The Hamming distance gives the number of different edges, taking into account also their orientations.
+
+PC vc Tabu
+```{r}
+hamming(net_pc, net_tabu)
+shd(net_pc, net_tabu)
+```
+
+PC vc original
+```{r}
+hamming(net_pc, net_original)
+shd(net_pc, net_original)
+```
+
+original vc Tabu
+```{r}
+hamming(net_original, net_tabu)
+shd(net_original, net_tabu)
+```
+
+
+The function compare is used to compare the skeletons of the two networks, ignoring arc directions.
+True positive (tp) arcs, which appear both in target and in current.
+False positive (fp) arcs, which appear in current but not in target.
+False negative (fn) arcs, which appear in target but not in current.
+
+```{r}
+compare(net_pc,net_tabu)
+```
+
+```{r}
+compare(net_original,net_pc)
+```
+
+```{r}
+compare(net_tabu,net_original)
+```
+
+
+
+
+Graphical comparison:
+False positive arcs (which are missing or have different directions in the true network) are in red;
+False negative arcs are in blue, and drawn using a dashed line.
+(see documentation at http://www.bnlearn.com/examples/compare-dags/)
+```{r}
+ graphviz.compare(net_tabu,net_pc,net_original)
+```
+
+Our difference measures are anyway influenced by the fact that the pc-stable algorithm is able to detect less edges than the others.
+
+
+####################################################################################################################
+
+How do the results change varying one parameter per algorithm?
+
+alpha = 0.05 (default)
+```{r}
+plot(net_pc)
+```
+
+```{r}
+plot( pc.stable(data,alpha=0.20))
+```
+
+```{r}
+plot( pc.stable(data,alpha=0.5))
+```
+
+```{r}
+plot( pc.stable(data,alpha=0.75))
+```
+
+```{r}
+bn <-  pc.stable(data,alpha=0.20)
+cat("\n")
+hamming(net_pc,bn)
+shd(net_pc, bn)
+```
+
+```{r}
+bn <-  pc.stable(data,alpha=0.5)
+cat("\n")
+hamming(net_pc,bn)
+shd(net_pc, bn)
+```
+
+```{r}
+bn <-  pc.stable(data,alpha=0.75)
+cat("\n")
+hamming(net_pc,bn)
+shd(net_pc, bn)
+```
+
+
+
+Tabu Search
+
+tabu = 10 (default). tabu also determine the value for max.tabu
+```{r}
+plot(tabu(data,score="bic"))
+```
+
+```{r}
+plot(tabu(data,score="bic",tabu = 20))
+```
+
+```{r}
+plot(tabu(data,score="bic",tabu = 50))
+```
+
+```{r}
+plot(tabu(data,score="bic",tabu = 100))
+```
+
+Let's now see for lower values of tabu
+```{r}
+plot(tabu(data,score="bic",tabu = 5))
+```
+
+```{r}
+plot(tabu(data,score="bic",tabu = 1))
+```
+
+```{r}
+bn <-  tabu(data,score="bic",tabu = 20)
+cat("\n")
+hamming(net_tabu,bn)
+shd(net_tabu, bn)
+```
+
+```{r}
+bn <-  tabu(data,score="bic",tabu = 50)
+cat("\n")
+hamming(net_tabu,bn)
+shd(net_tabu, bn)
+```
+
+```{r}
+bn <-  tabu(data,score="bic",tabu = 100)
+cat("\n")
+hamming(net_tabu,bn)
+shd(net_tabu, bn)
+```
+
+```{r}
+bn <-  tabu(data,score="bic",tabu = 5)
+cat("\n")
+hamming(net_tabu,bn)
+shd(net_tabu, bn)
+```
+
+```{r}
+bn <-  tabu(data,score="bic",tabu = 1)
+cat("\n")
+hamming(net_tabu,bn)
+shd(net_tabu, bn)
+```
+
+It seems that only the orientation of some adges changes by varying the value of tabu.

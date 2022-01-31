@@ -1,0 +1,610 @@
+---
+title: "Data Import and Preprocessing"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Import useful libraries
+```{r}
+library(tidyverse)
+library(dagitty)
+#library(bayesianNetworks)
+library(lavaan)
+library(stats)
+library(bnlearn)
+library(naniar)
+library(ggplot2)
+library(caret)
+library(MLmetrics)
+library(tree)
+library(ROSE)
+
+```
+
+Read original data
+```{r}
+data_original <- read.csv(paste0("data\\HR-Employee-Attrition.csv"))
+data_original <- as.data.frame(data_original)
+```
+
+Let's start now with some preprocessing steps.
+We are going to assembly and generalize, throughthe row mean, the three variables refering to the satisfaction of the worker (enviroment, job and relationship).
+
+
+Being that said, we will eliminate some variable which are redundant or useless for our purpose. 
+For instance, over18, EmployeeCount and Standard hours have only one value. 
+For daily, monthly and hourly rate will be consider only the feature income.
+Obviously, Employee number is an ID, we are not going to consider it.
+
+```{r}
+colnames(data_original)[1] = 'Age'
+
+data_original$Attrition <- as.numeric(ordered( data_original$Attrition,c("No","Yes")))
+data_original$Attrition <- as.numeric(ifelse(data_original$Attrition == 1, 0,1))
+
+data <- data_original %>% 
+  mutate(TotalSatisfaction = rowMeans(cbind(EnvironmentSatisfaction, JobSatisfaction, RelationshipSatisfaction))) %>% 
+  select(-c(Over18, StandardHours, EmployeeCount, EmployeeNumber, MonthlyRate, HourlyRate, DailyRate, JobInvolvement, EducationField, TrainingTimesLastYear,YearsWithCurrManager, Department, JobSatisfaction, EnvironmentSatisfaction, RelationshipSatisfaction, YearsInCurrentRole,  JobRole, PerformanceRating))
+
+
+
+str(data)
+```
+
+
+Let's look at possible missing values inside the data:
+```{r}
+gg_miss_var(data)
+```
+
+No missing among the data, let's continue with some other preprocessing steps.
+
+The next step will be the discretization of variables present in the data. We first need to create an order among the categories and second set as binary variables the ones that do not have a proper order.
+
+Make some variables ordered:
+```{r}
+
+data$JobLevel <- as.factor(data$JobLevel)
+data$JobLevel <- ordered(data$JobLevel, levels = c(1,2,3,4,5))
+
+data$WorkLifeBalance <- as.factor(data$WorkLifeBalance)
+data$WorkLifeBalance <- ordered(data$WorkLifeBalance, levels = c(1,2,3,4))
+
+data$TotalSatisfaction <- as.factor(round(data$TotalSatisfaction,0))
+data$TotalSatisfaction <- ordered(data$TotalSatisfaction, levels = c(1,2,3,4))
+
+data$Education <- as.factor(data$Education)
+data$Education <- ordered(data$Education, levels = c(1,2,3,4,5))
+
+data$StockOptionLevel <- as.factor(data$StockOptionLevel)
+data$StockOptionLevel <- ordered(data$StockOptionLevel, levels = c(0,1,2,3))
+
+
+data$BusinessTravel <- as.factor(data$BusinessTravel)
+data$BusinessTravel <- ordered(data$BusinessTravel, levels = c("Non-Travel","Travel_Rarely","Travel_Frequently"))
+
+
+
+```
+
+Binary variables:
+```{r}
+data$Gender <- as.numeric(ordered( data$Gender,c("Female","Male")))
+data$OverTime <- as.numeric(ordered( data$OverTime,c("No","Yes")))
+
+```
+
+
+MaritalStatus is an actually categorical variable and it cannot be ordered in a meaningful way, so we decided to make it binary by discarding the distinctions between people single and divorced.
+```{r}
+data$MaritalStatus <-as.integer( data$MaritalStatus=="Married" )
+```
+
+
+Once made all the variables in the appropriate way for our purporse, we can focus on data exploration.
+
+Let's look at the target variable's distribution.
+```{r}
+data %>% 
+  ggplot(aes(x = Attrition)) +
+  geom_histogram(stat = "count")
+
+data %>% 
+  group_by(Attrition) %>% 
+  summarise(n())
+```
+
+We are going to focus now on possible outliers in the data:
+```{r}
+numeric_variables <- c("Age", "DistanceFromHome", "MonthlyIncome", "NumCompaniesWorked", "PercentSalaryHike", "TotalWorkingYears", "YearsAtCompany", "YearsSinceLastPromotion")
+
+for (i in numeric_variables) {
+  boxplot(data[,i],
+  main = paste("Boxplot of ", i),
+  col = "orange",
+  border = "brown",
+  horizontal = TRUE,
+  notch = TRUE
+)
+}
+
+
+```
+The only variable which could give us some unpleasant resutls is MontlhyIncome.
+It shows several outliers according to the Boxplot above.
+However, if we look at the range, its values go from 1009 and 19999.
+Now, considering the context where the data has been taken to, it is not very meaningful apply any kind of transformation. In fact, this range seems to be really common and feasible in the labour market.
+
+
+We'll extract polychoric correlation matrix, suitable to handle both categorical and continuous data:
+```{r}
+M <-lavCor(data)
+```
+
+```{r}
+M
+```
+
+
+```{r}
+graph <- dagitty('dag {
+bb="-10,-10,10,10"
+Age [pos="-8.492,-4.863"]
+Attrition [pos="8.585,8.191"]
+BusinessTravel [pos="4.548,-5.263"]
+DistanceFromHome [pos="-6.647,-8.771"]
+Education [pos="-3.759,-4.927"]
+Gender [pos="-8.817,0.404"]
+JobLevel [pos="1.740,-2.421"]
+MaritalStatus [pos="-4.687,-7.383"]
+MonthlyIncome [pos="6.659,-1.333"]
+NumCompaniesWorked [pos="-5.151,2.912"]
+OverTime [pos="-7.229,6.522"]
+PercentSalaryHike [pos="3.643,2.281"]
+StockOptionLevel [pos="8.837,-8.681"]
+TotalSatisfaction [pos="8.724,4.766"]
+TotalWorkingYears [pos="-6.381,-2.035"]
+WorkLifeBalance [pos="6.357,-8.667"]
+YearsAtCompany [pos="-1.206,7.439"]
+YearsSinceLastPromotion [pos="-0.255,1.754"]
+Age -> Attrition
+Age -> Education
+Age -> JobLevel
+Age -> MaritalStatus
+Age -> TotalWorkingYears
+Age -> YearsAtCompany
+Age -> YearsSinceLastPromotion
+BusinessTravel -> WorkLifeBalance
+DistanceFromHome -> Attrition
+DistanceFromHome -> WorkLifeBalance
+Education -> JobLevel
+Gender -> MonthlyIncome
+Gender -> YearsSinceLastPromotion
+JobLevel -> BusinessTravel
+JobLevel -> MonthlyIncome
+MaritalStatus -> BusinessTravel
+MaritalStatus -> WorkLifeBalance
+MonthlyIncome -> TotalSatisfaction
+NumCompaniesWorked -> Attrition
+NumCompaniesWorked -> JobLevel
+NumCompaniesWorked -> YearsAtCompany
+OverTime -> Attrition
+OverTime -> TotalSatisfaction
+PercentSalaryHike -> MonthlyIncome
+PercentSalaryHike -> TotalSatisfaction
+StockOptionLevel -> Attrition
+StockOptionLevel -> MonthlyIncome
+TotalSatisfaction -> Attrition
+TotalWorkingYears -> JobLevel
+TotalWorkingYears -> NumCompaniesWorked
+TotalWorkingYears -> YearsAtCompany
+WorkLifeBalance -> TotalSatisfaction
+YearsAtCompany -> JobLevel
+YearsAtCompany -> YearsSinceLastPromotion
+YearsSinceLastPromotion -> JobLevel
+}
+
+'
+)
+plot(graph)
+```
+
+Test the model using the polychoric correlation matrix:
+```{r}
+test_polychoric <- localTests( graph, sample.cov=M, sample.nobs=nrow(data) )
+test_polychoric
+```
+
+
+
+
+Fitting the model based on polychoric correlation matrix:
+```{r}
+fit <-sem(toString(graph,"lavaan"), sample.cov=M, sample.nobs=nrow(data) )
+```
+
+
+```{r}
+summary(fit)
+```
+
+Looking at the results above, we decided to prune some meaningless causal relations with low estimate coefficient and high p-value. In particular these are:
+
+  age - yearsSinceLastPromotion
+  gender - monthlyIncome
+  Gender -YearsSinceLastPromotion
+  JobLevel - BusinessTravel
+  PercentSalaryHyke - MonthlyIncome
+
+
+
+```{r}
+
+graph2 <- dagitty('dag {
+bb="-10,-10,10,10"
+Age [pos="-8.492,-4.863"]
+Attrition [pos="8.585,8.191"]
+BusinessTravel [pos="4.548,-5.263"]
+DistanceFromHome [pos="-8.376,-8.481"]
+Education [pos="-3.759,-4.927"]
+Gender [pos="-8.190,6.982"]
+JobLevel [pos="1.740,-2.421"]
+MaritalStatus [pos="-4.687,-7.383"]
+MonthlyIncome [pos="5.452,-2.456"]
+NumCompaniesWorked [pos="-5.151,2.912"]
+OverTime [pos="-5.446,7.511"]
+PercentSalaryHike [pos="3.643,2.281"]
+StockOptionLevel [pos="8.605,-6.882"]
+TotalSatisfaction [pos="8.724,4.766"]
+TotalWorkingYears [pos="-8.329,2.035"]
+WorkLifeBalance [pos="6.357,-8.667"]
+YearsAtCompany [pos="-1.206,7.439"]
+YearsSinceLastPromotion [pos="-0.580,1.544"]
+Age -> Attrition
+Age -> Education
+Age -> JobLevel
+Age -> MaritalStatus
+Age -> TotalWorkingYears
+Age -> YearsAtCompany
+BusinessTravel -> WorkLifeBalance
+DistanceFromHome -> Attrition
+DistanceFromHome -> WorkLifeBalance
+Education -> JobLevel
+JobLevel -> MonthlyIncome
+MaritalStatus -> BusinessTravel
+MaritalStatus -> WorkLifeBalance
+MonthlyIncome -> TotalSatisfaction
+NumCompaniesWorked -> Attrition
+NumCompaniesWorked -> JobLevel
+NumCompaniesWorked -> YearsAtCompany
+OverTime -> Attrition
+OverTime -> TotalSatisfaction
+PercentSalaryHike -> TotalSatisfaction
+StockOptionLevel -> Attrition
+StockOptionLevel -> MonthlyIncome
+TotalSatisfaction -> Attrition
+TotalWorkingYears -> JobLevel
+TotalWorkingYears -> NumCompaniesWorked
+TotalWorkingYears -> YearsAtCompany
+WorkLifeBalance -> TotalSatisfaction
+YearsAtCompany -> JobLevel
+YearsAtCompany -> YearsSinceLastPromotion
+YearsSinceLastPromotion -> JobLevel
+}
+
+
+
+')
+
+plot(graph2)
+
+```
+Test the new model using the polychoric correlation matrix:
+```{r}
+test_polychoric2 <- localTests( graph2, sample.cov=M, sample.nobs=nrow(data) )
+test_polychoric2
+```
+  
+```{r}
+fit2 <-sem(toString(graph2,"lavaan"), sample.cov=M, sample.nobs=nrow(data) )
+```
+  
+```{r}
+summary(fit2)
+```
+
+In this DAG still remain some relations with high p-value and low estimate coefficient with also a controversial causation. Thus we decided to remove:
+
+  WorkLifeBalance - BusinessTravel
+  BusinessTravel - MaritialStatus
+  WorkLifeBalance - MaritialStatus
+  TotalSatisfaction - MonthlyIncome
+  JobLevel - NumCompaniesWorked
+  JobLevel - YearsSinceLastPromotion
+
+Furthermore we opted to add two edges: Gender - Attrition and BusinessTravel - Attrition.
+
+Finally, we mantained the relationship between Education and JobLevel even if they appear to be not linear related from the data. That's because we think these two features are casually linked.
+  
+  
+```{r}
+
+graph3 <- dagitty('dag {
+bb="-10,-10,10,10"
+Age [pos="-9.128,-3.073"]
+Attrition [pos="8.585,8.191"]
+BusinessTravel [pos="2.558,5.866"]
+DistanceFromHome [pos="-7.209,-8.883"]
+Education [pos="-1.624,-6.105"]
+Gender [pos="-0.232,4.702"]
+JobLevel [pos="-0.853,-0.196"]
+MaritalStatus [pos="0.278,8.175"]
+MonthlyIncome [pos="7.868,-2.682"]
+NumCompaniesWorked [pos="-4.200,8.140"]
+OverTime [pos="0.853,-8.855"]
+PercentSalaryHike [pos="4.981,1.313"]
+StockOptionLevel [pos="4.341,-8.324"]
+TotalSatisfaction [pos="1.318,-2.961"]
+TotalWorkingYears [pos="-8.566,8.017"]
+WorkLifeBalance [pos="-2.054,-8.827"]
+YearsAtCompany [pos="-4.031,1.453"]
+YearsSinceLastPromotion [pos="2.483,2.456"]
+Age -> Attrition
+Age -> Education
+Age -> JobLevel
+Age -> MaritalStatus
+Age -> NumCompaniesWorked
+Age -> TotalWorkingYears
+Age -> YearsAtCompany
+BusinessTravel -> Attrition
+DistanceFromHome -> Attrition
+DistanceFromHome -> WorkLifeBalance
+Education -> JobLevel
+Gender -> BusinessTravel
+JobLevel -> MonthlyIncome
+MaritalStatus -> Attrition
+MonthlyIncome -> Attrition
+NumCompaniesWorked -> YearsAtCompany
+OverTime -> Attrition
+OverTime -> TotalSatisfaction
+PercentSalaryHike -> Attrition
+StockOptionLevel -> Attrition
+StockOptionLevel -> MonthlyIncome
+TotalSatisfaction -> Attrition
+TotalWorkingYears -> JobLevel
+TotalWorkingYears -> MonthlyIncome
+TotalWorkingYears -> NumCompaniesWorked
+TotalWorkingYears -> YearsAtCompany
+WorkLifeBalance -> TotalSatisfaction
+YearsAtCompany -> JobLevel
+YearsAtCompany -> YearsSinceLastPromotion
+YearsSinceLastPromotion -> Attrition
+}
+
+
+')
+
+plot(graph3)
+
+```
+
+Testing the conditional independencies of the DAG using polychoric correlation matrix
+```{r}
+test_polychoric3 <- localTests( graph3, sample.cov=M, sample.nobs=nrow(data) )
+test_polychoric3
+```
+
+Fitting the DAG
+```{r}
+fit3 <-sem(toString(graph3,"lavaan"), sample.cov=M, sample.nobs=nrow(data) )
+
+summary(fit3)
+```
+
+
+
+Frome the results obtained, we can see that most of the edges of our final DAG are significative. In particular we have found several important estimates:
+
+MonthlyIncome ~ JobLevel; TotalWorkingYears ~ Age; YearsAtCompany ~ TotalWorkngYrs; JobLevel ~ TotalWorkngYrs;   YearsSinceLastPromotion ~ YearsAtCompany;
+
+All of these have an estimate coefficient of at least 0.60 and are positively correlated, as well as logically casual associated.
+
+We decided to keep the relation between JobLevel - Education and PercentSalaryHike - Attrition, despite having a bad results according to the data we have, because of strong causal relation between these variables in the real world. We should consider that the relations shown in the results are linear. It could be possible that Education and JobLevel or PercentSalaryHike and Attrition are linked in a non-linear way (e.g. a quadratic, exponential, etc.).
+
+
+
+
+
+-> How to perform a prediction in the case of polychoric correlation?
+(Not possible.)
+Solution:
+Split the data into training and test set, keep subset of the variables which are relevant based on DAG and exploit them to perform a classification model on the target variables. Once built up the model and we will use it to make prediction. 
+
+
+
+
+One way, we can perform is test predictions try to forecast a node from its parents.
+Let's try to build a linear model based on the stepwise approach:
+
+
+
+Let's try now with one more approach.
+We are going to subset the variables, choosing the ones that are directly correlated with the target variable Attrition:
+```{r}
+data_prediction <- data_original %>% 
+  mutate(TotalSatisfaction = rowMeans(cbind(EnvironmentSatisfaction, JobSatisfaction, RelationshipSatisfaction))) %>% 
+  select(c(Attrition, TotalSatisfaction, BusinessTravel, MonthlyIncome, PercentSalaryHike, MaritalStatus, YearsSinceLastPromotion, OverTime, DistanceFromHome, Age, StockOptionLevel))
+
+```
+
+
+```{r}
+data_prediction$MaritalStatus <-as.integer( data_prediction$MaritalStatus=="Married" )
+
+set.seed(123)
+train_index <- createDataPartition(data_prediction$Attrition, p = 0.67, list = FALSE)
+
+train_set <- data_prediction[train_index, ]
+test_set <- data_prediction[-train_index, ]
+
+```
+
+Let's perform now a logistic model:
+```{r}
+mod_logistic <-glm(Attrition ~ ., family =  "binomial", data = train_set)
+summary(mod_logistic)
+
+```
+
+
+
+```{r}
+prediction_logistic <- predict(mod_logistic, type="response", test_set)
+prediction_logistic <- ifelse(prediction_logistic > 0.5, 1, 0)
+```
+
+```{r}
+P <- Precision(test_set$Attrition, prediction_logistic)
+R <- Recall(test_set$Attrition, prediction_logistic)
+print(paste('Precision: ', P))
+print(paste('Recall: ', R))
+print(paste('F1measure :', (2 * P * R) / (P + R)))
+print(paste('Accuracy :' , Accuracy(test_set$Attrition, prediction_logistic)))
+print(paste('AUC :' , AUC(test_set$Attrition, prediction_logistic)))
+```
+
+The results achieved are affected by the problem known as Class Unbalanced.
+
+Thus, in order to correct this issue, we are going to oversample the data:
+```{r}
+data_prediciton_over <- ovun.sample(Attrition ~ ., data = data_prediction, method = "over")$data
+
+set.seed(123)
+train_index <- createDataPartition(data_prediciton_over$Attrition, p = 0.67, list = FALSE)
+
+train_set <- data_prediciton_over[train_index, ]
+test_set <- data_prediciton_over[-train_index, ]
+```
+
+```{r}
+mod_logistic_over <-glm(Attrition ~ ., family =  "binomial", data = train_set)
+summary(mod_logistic_over)
+
+```
+
+
+
+```{r}
+prediction_logistic_over <- predict(mod_logistic_over, type="response", test_set)
+prediction_logistic_over <- ifelse(prediction_logistic_over > 0.5, 1, 0)
+```
+
+```{r}
+P <- Precision(test_set$Attrition, prediction_logistic_over)
+R <- Recall(test_set$Attrition, prediction_logistic_over)
+print(paste('Precision: ', P))
+print(paste('Recall: ', R))
+print(paste('F1measure :', (2 * P * R) / (P + R)))
+print(paste('Accuracy :' , Accuracy(test_set$Attrition, prediction_logistic_over)))
+print(paste('AUC :' , AUC(test_set$Attrition, prediction_logistic_over)))
+```
+
+
+
+
+
+
+All the standard evaluation measures seem to give us helpful results.
+
+One clever approach can be implement a logistic regression, based on the stepwise selection criterion.
+
+```{r}
+library(MASS)
+step.model <- stepAIC(mod_logistic_over, direction = "backward", trace = FALSE)
+summary(step.model)
+
+```
+
+Both classic linear logistic regression and stepwise logistic agree with the results achieved with the fitting carried out by the polychoric correlation matrix.
+Indeed, PercentSalaryHike is considered as useless to get affect the attrition attitude of employees, while yearsSinceLastPromotion is the less significative.
+
+Let's look at the prediction carried out by the stepwise logistic model:
+
+```{r}
+prediction_step <- predict(step.model, type="response", test_set)
+prediction_step <- ifelse(prediction_step > 0.5, 1, 0)
+```
+
+```{r}
+P <- Precision(test_set$Attrition, prediction_step)
+R <- Recall(test_set$Attrition, prediction_step)
+print(paste('Precision: ', P))
+print(paste('Recall: ', R))
+print(paste('F1measure :', (2 * P * R) / (P + R)))
+print(paste('Accuracy :' , Accuracy(test_set$Attrition, prediction_step)))
+print(paste('AUC :' , AUC(test_set$Attrition, prediction_step)))
+```
+
+
+
+
+Let's go ahead with one more classification model: Decision Tree
+```{r}
+decision_tree <- tree(Attrition ~ . , data = train_set)
+summary(decision_tree)
+decision_tree
+
+```
+```{r}
+plot(decision_tree)
+text(decision_tree, pretty = 0)
+```
+
+```{r}
+tree_prediction = predict(decision_tree, test_set)
+tree_prediction <- ifelse(tree_prediction >0.5,1,0)
+```
+
+```{r}
+P <- Precision(test_set$Attrition, tree_prediction)
+R <- Recall(test_set$Attrition, tree_prediction)
+print(paste('Precision: ', P))
+print(paste('Recall: ', R))
+print(paste('F1measure :', (2 * P * R) / (P + R)))
+print(paste('Accuracy :' , Accuracy(test_set$Attrition, tree_prediction)))
+print(paste('AUC :' , AUC(test_set$Attrition, tree_prediction)))
+
+```
+
+```{r}
+prediction_logistic_over <- as.factor(prediction_logistic_over)
+prediction_step <- as.factor(prediction_step)
+tree_prediction <- as.factor(tree_prediction)
+```
+```{r}
+test_set$Attrition <- as.factor(test_set$Attrition)
+```
+
+Let's look now the confusion matrix of the 3 models performed:
+```{r}
+confusionMatrix(prediction_logistic_over,test_set$Attrition,positive='1')
+confusionMatrix(prediction_step,test_set$Attrition,positive='1')
+confusionMatrix(tree_prediction,test_set$Attrition,positive='1')
+
+```
+Considering the simplicity of the models tried above, we can state that the predictions show good results.
+Moreover, we should consider as fundamental factor, the matching between our DAG and the results got with the linear models above.
+
+
+
+
+
+
+Step to follow:
+testing your structure,  --> localtests
+fitting your parameters, --> plycoric
+and performing predictions --> classification models.
+
